@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <limits.h>
 
 #include "sp_measure.h"
 #include "measure_utils.h"
@@ -41,8 +42,8 @@
  * Calculates process clean and dirty memory.
  *
  * The clean and dirty memory is calculated by simply parsing
- * /proc/<pdi>/smaps file.
- * @param stats[in, out]   in  - the smaps file pointer.
+ * /proc/<pid>/smaps file.
+ * @param[in,out] stats    in  - the smaps file pointer.
  *                         out - memory statistics.
  * @return                 0 for success.
  */
@@ -50,8 +51,8 @@ static int file_parse_proc_smaps(
 		sp_measure_proc_data_t* data
 		)
 {
-	char buffer[128], key[128];
-	int value, i;
+	char buffer[128];
+	unsigned i;
 	parse_query_t query[] = {
 			{"Private_Clean", &data->mem_private_clean, false},
 			{"Private_Dirty", &data->mem_private_dirty, false},
@@ -63,34 +64,60 @@ static int file_parse_proc_smaps(
 			{"Rss", &data->mem_rss, false},
 			{"Referenced", &data->mem_referenced, false},
 		};
+	FILE* fp = fopen(data->common->proc_smaps_path, "r");
+	if (!fp) {
+		for (i = 0; i < ARRAY_ITEMS(query); i++) {
+			*(query[i].value) = ESPMEASURE_UNDEFINED;
+		}
+		return -1;
+	}
 	for (i = 0; i < ARRAY_ITEMS(query); i++) {
 		*(query[i].value) = 0;
 	}
-	FILE* fp = fopen(data->common->proc_smaps_path, "r");
-	if (fp) {
-		while (fgets(buffer, sizeof(buffer), fp)) {
-			if (sscanf(buffer, "%[^:]: %d", key, &value) == 2) {
-				for (i = 0; i < ARRAY_ITEMS(query); i++) {
-					if (!strcmp(query[i].key, key)) {
-						*(query[i].value) += value;
-						break;
-					}
-				}
-			}
+	while (fgets(buffer, sizeof(buffer), fp)) {
+		if (buffer[0] == 0)
+			continue;
+		/* We are only interested in /proc/pid/smaps lines that start
+		 * with one of these letters.
+		 */
+		if (!(buffer[0] == 'P' ||
+		      buffer[0] == 'R' ||
+		      buffer[0] == 'S'))
+			continue;
+		char* colon = strchr(buffer, ':');
+		if (colon == NULL || colon[1] == 0 || buffer == colon)
+			continue;
+		*colon = 0;
+		for (i = 0; i < ARRAY_ITEMS(query); i++) {
+			if (strcmp(query[i].key, buffer) != 0)
+				continue;
+			char* start = &colon[1];
+			char* end;
+			int value;
+			while (*start && *start == ' ')
+				++start;
+			/* Checking the end would not be strictly required with atoi(). */
+			end = start;
+			while (*end && *end >= '0' && *end <= '9')
+				++end;
+			if (*end != ' ')
+				break;
+			*end = 0;
+			value = atoi(start);
+			if (value <= 0)
+				break;
+			*(query[i].value) += value;
+			break;
 		}
-		fclose(fp);
-		return 0;
 	}
-	for (i = 0; i < ARRAY_ITEMS(query); i++) {
-		*(query[i].value) = ESPMEASURE_UNDEFINED;
-	}
-	return -1;
+	fclose(fp);
+	return 0;
 }
 
 /**
  * Get cpu statistics from /proc/<pid>/stat file.
  *
- * @return stats[in, out]   in  - the /proc/<pid>/stat file pointer.
+ * @return[in,out] stats    in  - the /proc/<pid>/stat file pointer.
  *                          out - the cpu statistics.
  * @return                  0 for success.
  */
@@ -152,13 +179,13 @@ static int file_parse_proc_stat(
 char* get_process_name(int pid)
 {
 	int fd, n;
-	char buffer[512];
 	char* proc_name = NULL;
+	char buffer[PATH_MAX];
 
-	sprintf(buffer, "%s/proc/%d/cmdline", sp_measure_virtual_fs_root, pid);
+	snprintf(buffer, sizeof(buffer), "%s/proc/%d/cmdline", sp_measure_virtual_fs_root, pid);
 	fd = open(buffer, O_RDONLY);
 	if (fd == -1) {
-		sprintf(buffer, "%s/proc/%d/status", sp_measure_virtual_fs_root, pid);
+		snprintf(buffer, sizeof(buffer), "%s/proc/%d/status", sp_measure_virtual_fs_root, pid);
 		FILE* fp = fopen(buffer, "r");
 		if (fp) {
 			char name[256];
@@ -214,7 +241,7 @@ int sp_measure_init_proc_data(
 	}
 	else
 	{
-		char buffer[256];
+		char buffer[PATH_MAX];
 		new_data->common = (sp_measure_proc_common_t*)malloc(sizeof(sp_measure_proc_common_t));
 		if (new_data->common == NULL) return -ENOMEM;
 
@@ -222,11 +249,11 @@ int sp_measure_init_proc_data(
 		new_data->common->ref_count = 1;
 
 		/* open data files */
-		sprintf(buffer, "%s/proc/%d/smaps", sp_measure_virtual_fs_root, pid);
+		snprintf(buffer, sizeof(buffer), "%s/proc/%d/smaps", sp_measure_virtual_fs_root, pid);
 		new_data->common->proc_smaps_path = strdup(buffer);
 		if (new_data->common->proc_smaps_path == NULL) return -ENOMEM;
 
-		sprintf(buffer, "%s/proc/%d/stat", sp_measure_virtual_fs_root, pid);
+		snprintf(buffer, sizeof(buffer), "%s/proc/%d/stat", sp_measure_virtual_fs_root, pid);
 		new_data->common->proc_stat_path = strdup(buffer);
 		if (new_data->common->proc_stat_path == NULL) return -ENOMEM;
 

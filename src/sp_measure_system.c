@@ -30,6 +30,7 @@
 #include <sys/time.h>
 #include <ftw.h>
 #include <stdint.h>
+#include <limits.h>
 
 #include "sp_measure.h"
 #include "measure_utils.h"
@@ -45,9 +46,9 @@
 /**
  * Set ticks spent at the specified frequency.
  *
- * @param data[out]  the system snapshot.
- * @param freq[in]        the cpu frequency in Hz.
- * @param ticks[in]       the number of ticks spent at the frequency freq.
+ * @param[out] data  the system snapshot.
+ * @param[in] freq        the cpu frequency in Hz.
+ * @param[in] ticks       the number of ticks spent at the frequency freq.
  * @return                0 for success.
  */
 static int cpu_stats_set_freq_ticks(
@@ -91,8 +92,8 @@ static int cpu_stats_set_freq_ticks(
 /**
  * Calculates average frequency during the time slice between two snapshots.
  *
- * @param first[in]   the first snapshot.
- * @param second[in]  the second snapshot.
+ * @param[in] first   the first snapshot.
+ * @param[in] second  the second snapshot.
  * @return            average frequency in Hz
  */
 static int cpu_stats_diff_avg_freq(
@@ -123,9 +124,9 @@ static int cpu_stats_diff_avg_freq(
  * Retrieves values specified in data structure (key field) from
  * /proc/meminfo file.
  *
- * @param data[in,out]    in  - list of keys to read.
+ * @param[in,out] data    in  - list of keys to read.
  *                        out - the scanned values.
- * @param length[in]      the number of items in data list.
+ * @param[in] length      the number of items in data list.
  * @return                the number of values retrieved.
  */
 static int file_parse_proc_meminfo(
@@ -134,10 +135,9 @@ static int file_parse_proc_meminfo(
 		)
 {
 	int nscanned = 0, value = 0, i;
-	char buffer[128], key[128];
-	char filename[256];
-	sprintf(filename, "%s/proc/meminfo", sp_measure_virtual_fs_root);
-	FILE* fp = fopen(filename, "r");
+	char key[128], buffer[PATH_MAX];
+	snprintf(buffer, sizeof(buffer), "%s/proc/meminfo", sp_measure_virtual_fs_root);
+	FILE* fp = fopen(buffer, "r");
 	if (fp) {
 		while (fgets(buffer, sizeof(buffer), fp) && nscanned < length) {
 			if (sscanf(buffer, "%[^:]: %d", key, &value) == 2) {
@@ -161,8 +161,8 @@ static int file_parse_proc_meminfo(
 /**
  * Reads single integer value from a file.
  *
- * @param filename[in]   the file to read.
- * @param value[out]     the read value.
+ * @param[in] filename   the file to read.
+ * @param[out] value     the read value.
  * @return               0 for success.
  */
 static int file_read_int(
@@ -170,15 +170,17 @@ static int file_read_int(
 		int* value
 		)
 {
-	char buffer[256];
-	sprintf(buffer, "%s%s", sp_measure_virtual_fs_root, filename);
+	char buffer[PATH_MAX];
+	snprintf(buffer, sizeof(buffer), "%s%s", sp_measure_virtual_fs_root, filename);
 	int fd = open(buffer, O_RDONLY);
 	if (fd != -1) {
 		int n = read(fd, buffer, sizeof(buffer) - 1);
-		buffer[n] = '\0';
-		*value = atoi(buffer);
 		close(fd);
-		return 0;
+		if (n > 0) {
+			buffer[n] = '\0';
+			*value = atoi(buffer);
+			return 0;
+		}
 	}
 	return -1;
 }
@@ -186,8 +188,8 @@ static int file_read_int(
 /**
  * Reads single int value from a cgroup file with conversion to kbytes.
  *
- * @param filename[in]   the file to read.
- * @param value[out]     the read value.
+ * @param[in] filename   the file to read.
+ * @param[out] value     the read value.
  * @return               0 for success.
  */
 static int cgroup_read_int(
@@ -196,15 +198,17 @@ static int cgroup_read_int(
 		)
 {
 	if (data->common->cgroup_root) {
-		char buffer[256];
-		sprintf(buffer, "%s/%s", data->common->cgroup_root, filename);
+		char buffer[PATH_MAX];
+		snprintf(buffer, sizeof(buffer), "%s/%s", data->common->cgroup_root, filename);
 		int fd = open(buffer, O_RDONLY);
 		if (fd != -1) {
 			int n = read(fd, buffer, sizeof(buffer) - 1);
-			buffer[n] = '\0';
-			data->mem_cgroup = (int)(strtoull(buffer, NULL, 10) >> 10);
 			close(fd);
-			return 0;
+			if (n > 0) {
+				buffer[n] = '\0';
+				data->mem_cgroup = (int)(strtoull(buffer, NULL, 10) >> 10);
+				return 0;
+			}
 		}
 	}
 	data->mem_cgroup = ESPMEASURE_UNDEFINED;
@@ -217,7 +221,7 @@ static int cgroup_read_int(
  *
  * The common parameters are assigned during initialization and not
  * changed during snapshots.
- * @param stats[out]  the system snapshot.
+ * @param[out] stats  the system snapshot.
  * @return            0 for success.
  */
 static int sys_init_memory_data(
@@ -245,7 +249,7 @@ static int sys_init_memory_data(
  *
  * The common parameters are assigned during initialization and not
  * changed during snapshots.
- * @param stats[out]  the cpu snapshot.
+ * @param[out] stats  the cpu snapshot.
  * @return            0 for success.
  */
 static int sys_init_cpu_data(
@@ -263,15 +267,15 @@ static int sys_init_cpu_data(
 /**
  * Retrieve snapshot cpu ticks.
  *
- * @param stats[out]    the system snapshot.
+ * @param[out] stats    the system snapshot.
  * @return              0 for success.
  */
 static int sys_get_cpu_ticks_total(
 		sp_measure_sys_data_t* stats
 		)
 {
-	char buffer[512];
-	sprintf(buffer, "%s/proc/stat", sp_measure_virtual_fs_root);
+	char buffer[PATH_MAX];
+	snprintf(buffer, sizeof(buffer), "%s/proc/stat", sp_measure_virtual_fs_root);
 	FILE* fp = fopen(buffer, "r");
 	if (fp) {
 		stats->cpu_ticks_total = 0;
@@ -303,15 +307,15 @@ static int sys_get_cpu_ticks_total(
 /**
  * Retrieves ticks per frequency statistics for the first cpu.
  *
- * @param stats[out]   the cpu snapshot.
+ * @param[out] stats   the cpu snapshot.
  * @return             0 for success.
  */
 static int sys_get_cpu_ticks_per_freq(
 		sp_measure_sys_data_t* stats
 		)
 {
-	char buffer[512];
-	sprintf(buffer, "%s/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state", sp_measure_virtual_fs_root);
+	char buffer[PATH_MAX];
+	snprintf(buffer, sizeof(buffer), "%s/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state", sp_measure_virtual_fs_root);
 	FILE* fp = fopen(buffer, "r");
 	if (fp) {
 		int freq, ticks;
@@ -561,22 +565,14 @@ int sp_measure_diff_sys_mem_cgroup(
 }
 
 
-/**
- * Sets root of the /proc file system.
- *
- * This function allows to override the default proc file system root
- * /proc with a custom value. Use NULL path to reset it to the default
- * value.
- * This function is only used for testing purposes - that's why it has
- * not been included into sp_measure* headers.
- * @param path[in]   the new root of proc file system. Use NULL to
- *                   reset to the default value /proc.
- * @return
- */
-int sp_measure_set_fs_root(const char* path) {
+int sp_measure_set_fs_root(const char* path)
+{
 	if (sp_measure_virtual_fs_root != sp_measure_fs_root) {
 		free(sp_measure_virtual_fs_root);
 	}
 	sp_measure_virtual_fs_root = path ? strdup(path) : sp_measure_fs_root;
-	return 0;
+	if (sp_measure_virtual_fs_root) {
+		return 0;
+	}
+	return -1;
 }
